@@ -1,0 +1,27 @@
+{
+  "name": "zillow_scrapper",
+  "module": "index.ts",
+  "type": "module",
+  "scripts": {
+    "dev": "bun --watch src/index.ts",
+    "build": "bun build src/index.ts --target bun --outdir ./dist",
+    "start": "NODE_ENV=production bun dist/index.js",
+    "test": "bun test"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.1.14"
+  },
+  "peerDependencies": {
+    "typescript": "^5.0.0"
+  },
+  "dependencies": {
+    "@elysiajs/swagger": "^1.1.6",
+    "csv-parser": "^3.0.0",
+    "elysia": "^1.1.26",
+    "exceljs": "^4.4.0",
+    "export-to-csv": "^1.4.0",
+    "puppeteer": "^23.10.3",
+    "puppeteer-extra": "^3.3.6",
+    "puppeteer-extra-plugin-stealth": "^2.11.2"
+  }
+}
