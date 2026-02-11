@@ -15,13 +15,21 @@
     "typescript": "^5.0.0"
   },
   "dependencies": {
+    "@elysiajs/static": "^1.4.7",
     "@elysiajs/swagger": "^1.1.6",
+    "@elysiajs/websocket": "^0.2.8",
+    "axios": "^1.13.5",
+    "cheerio": "^1.2.0",
     "csv-parser": "^3.0.0",
     "elysia": "^1.1.26",
     "exceljs": "^4.4.0",
     "export-to-csv": "^1.4.0",
+    "ioredis": "^5.9.2",
+    "p-limit": "^7.3.0",
     "puppeteer": "^23.10.3",
     "puppeteer-extra": "^3.3.6",
-    "puppeteer-extra-plugin-stealth": "^2.11.2"
+    "puppeteer-extra-plugin-stealth": "^2.11.2",
+    "xlsx": "^0.18.5",
+    "zenrows": "^2.0.1"
   }
 }
