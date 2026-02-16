@@ -477,6 +477,62 @@ const service = new Elysia()
       isStopped: upload.isStopped,
       isProcessing: upload.isProcessing // Expose processing status
     };
+  })
+  // 5. List Sessions
+  .get("/sessions", async () => {
+    const sessions = [];
+    const files = await readdir('uploads');
+
+    // 1. Memory sessions
+    const memoryIds = new Set(uploadStore.keys());
+    for (const [id, upload] of uploadStore.entries()) {
+      sessions.push({
+        id,
+        originalName: upload.originalName,
+        total: upload.total,
+        processed: upload.processedRows.length,
+        createdAt: new Date().toISOString(), // Approximation if meta not read, or read meta
+        isInMemory: true
+      });
+    }
+
+    // 2. Disk sessions (merge with memory)
+    for (const file of files) {
+      if (file.startsWith('meta_') && file.endsWith('.json')) {
+        const id = file.replace('meta_', '').replace('.json', '');
+        if (!memoryIds.has(id)) {
+          try {
+            const meta = JSON.parse(await readFile(`uploads/${file}`, 'utf-8'));
+            // Check processed count on disk
+            let processedCount = 0;
+            if (existsSync(`uploads/processed_${id}.csv`)) {
+              // Quick line count or just rely on meta if we updated it (we don't update meta currently)
+              // For speed, let's just say "Unknown" or count lines if needed. 
+              // Actually, let's use the file size or just load it if not too big for accurate count?
+              // Better: just send meta and let client fetch status if needed?
+              // For now, let's try to get a count from the CSV file.
+              // processedCount = (await Bun.file(`uploads/processed_${id}.csv`).text()).split('\n').length - 1; 
+              // The above is expensive for large files. 
+              // Let's just return meta info and maybe updated at from file stats.
+            }
+
+            sessions.push({
+              id,
+              originalName: meta.originalName,
+              total: meta.total,
+              processed: meta.total, // Assume complete if on disk and not in memory? OR just -1
+              createdAt: meta.createdAt || new Date().toISOString(),
+              isInMemory: false
+            });
+          } catch (e) { }
+        }
+      }
+    }
+
+    // Sort by Date Desc
+    sessions.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+
+    return sessions;
   });
 
 export default service;

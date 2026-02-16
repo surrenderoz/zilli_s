@@ -1,0 +1,355 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Zillow Scraper Results</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 2rem;
+            background-color: #f5f5f7;
+            color: #1d1d1f;
+        }
+
+        .container {
+            background: white;
+            padding: 2rem;
+            border-radius: 12px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+        }
+
+        .header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 2rem;
+        }
+
+        h1 {
+            margin: 0;
+            color: #006aff;
+        }
+
+        .nav-link {
+            text-decoration: none;
+            color: #006aff;
+            font-weight: 500;
+            margin-left: 1rem;
+        }
+
+        .nav-link:hover {
+            text-decoration: underline;
+        }
+
+        .filter-section {
+            display: flex;
+            gap: 1rem;
+            margin-bottom: 1.5rem;
+            align-items: center;
+            background: #f8f9fa;
+            padding: 1rem;
+            border-radius: 8px;
+        }
+
+        /* Table Styles */
+        .results-container {
+            overflow-x: auto;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.9rem;
+        }
+
+        th,
+        td {
+            padding: 10px 12px;
+            border-bottom: 1px solid #ddd;
+            text-align: left;
+        }
+
+        th {
+            background-color: #f8f9fa;
+            font-weight: 600;
+        }
+
+        tr:hover {
+            background-color: #f1f1f1;
+        }
+
+        .price {
+            font-weight: bold;
+            color: #2e7d32;
+        }
+
+        .session-header {
+            background-color: #e3f2fd;
+            font-weight: bold;
+        }
+
+        .session-info {
+            cursor: pointer;
+            user-select: none;
+        }
+
+        button {
+            padding: 0.5rem 1rem;
+            background: #006aff;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+
+        button.secondary {
+            background: #6c757d;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>All Results</h1>
+            <div>
+                <a href="/" class="nav-link">Home</a>
+                <span style="color: #ccc; margin: 0 10px;">|</span>
+                <span style="font-weight: bold;">Results</span>
+            </div>
+        </div>
+
+        <div class="filter-section">
+            <label>
+                Filter by Date:
+                <input type="date" id="dateFilter">
+            </label>
+            <label>
+                Filter by File:
+                <select id="fileFilter">
+                    <option value="">All Files</option>
+                </select>
+            </label>
+            <button id="clearFilterBtn" class="secondary">Clear</button>
+            <button id="refreshBtn" style="margin-left: auto;">Refresh Data</button>
+        </div>
+
+        <div id="loading" style="text-align: center; display: none;">Loading...</div>
+
+        <div class="results-container">
+            <table id="resultsTable">
+                <thead>
+                    <tr>
+                        <th>Date</th>
+                        <th>File Name</th>
+                        <th>Address</th>
+                        <th>Client</th>
+                        <th>Email</th>
+                        <th style="cursor: pointer;" onclick="toggleSort('price')">Zestimate ↕</th>
+                        <th>Zipcode</th>
+                        <th>URL</th>
+                    </tr>
+                </thead>
+                <tbody id="tableBody"></tbody>
+            </table>
+        </div>
+
+        <div id="paginationControls"
+            style="display: none; justify-content: space-between; align-items: center; margin-top: 1rem;">
+            <div>
+                <label>Rows per page:
+                    <select id="rowsPerPageSelect">
+                        <option value="25">25</option>
+                        <option value="50">50</option>
+                        <option value="100">100</option>
+                        <option value="500">500</option>
+                    </select>
+                </label>
+            </div>
+            <div>
+                <button id="prevBtn" disabled>Prev</button>
+                <span id="pageInfo" style="margin: 0 10px;">Page 1 of 1</span>
+                <button id="nextBtn" disabled>Next</button>
+            </div>
+        </div>
+
+    </div>
+
+    <script>
+        const dateFilter = document.getElementById('dateFilter');
+        const fileFilter = document.getElementById('fileFilter');
+        const clearFilterBtn = document.getElementById('clearFilterBtn');
+        const refreshBtn = document.getElementById('refreshBtn');
+        const tableBody = document.getElementById('tableBody');
+        const loading = document.getElementById('loading');
+
+        const paginationControls = document.getElementById('paginationControls');
+        const rowsPerPageSelect = document.getElementById('rowsPerPageSelect');
+        const prevBtn = document.getElementById('prevBtn');
+        const nextBtn = document.getElementById('nextBtn');
+        const pageInfo = document.getElementById('pageInfo');
+
+        let allSessions = [];
+        let allData = []; // Flattened rows
+        let filteredData = [];
+        let sortDir = 'desc'; // Default Sort by Price Desc
+
+        let currentPage = 1;
+        let rowsPerPage = 25;
+
+        async function fetchSessions() {
+            try {
+                loading.style.display = 'block';
+                const res = await fetch('/sessions');
+                allSessions = await res.json();
+
+                // Populate File Filter
+                fileFilter.innerHTML = '<option value="">All Files</option>';
+                const files = [...new Set(allSessions.map(s => s.originalName))].sort();
+                files.forEach(f => {
+                    const op = document.createElement('option');
+                    op.value = f;
+                    op.textContent = f;
+                    fileFilter.appendChild(op);
+                });
+
+                // Fetch details for each session to flatten
+                // NOTE: For very large datasets, this should be server-side or lazy loaded.
+                // Assuming reasonable size for now as per instructions.
+                allData = [];
+
+                const fetchPromises = allSessions.map(async (session) => {
+                    try {
+                        // We use the download CSV endpoint to get full data or status endpoint if it includes rows
+                        const res = await fetch(`/status/${session.id}`);
+                        const data = await res.json();
+                        if (data.rows && Array.isArray(data.rows)) {
+                            return data.rows.map(row => ({
+                                ...row,
+                                _sessionId: session.id,
+                                _sessionName: session.originalName,
+                                _date: session.createdAt
+                            }));
+                        }
+                        return [];
+                    } catch (e) { console.error(e); return []; }
+                });
+
+                const results = await Promise.all(fetchPromises);
+                allData = results.flat();
+
+                // Sort by Price Desc by default
+                sortData();
+
+                applyFilter();
+            } catch (error) {
+                console.error('Error fetching data:', error);
+                tableBody.innerHTML = '<tr><td colspan="8" style="color:red; text-align:center;">Failed to load data</td></tr>';
+            } finally {
+                loading.style.display = 'none';
+            }
+        }
+
+        function toggleSort() {
+            sortDir = sortDir === 'desc' ? 'asc' : 'desc';
+            sortData();
+            applyFilter(); // Re-render
+        }
+
+        function sortData() {
+            allData.sort((a, b) => {
+                const priceA = parseInt(String(a.zillow_estimated_price || '0').replace(/[^0-9]/g, '') || '0');
+                const priceB = parseInt(String(b.zillow_estimated_price || '0').replace(/[^0-9]/g, '') || '0');
+                return sortDir === 'desc' ? priceB - priceA : priceA - priceB;
+            });
+        }
+
+        function applyFilter() {
+            const dateVal = dateFilter.value;
+            const fileVal = fileFilter.value;
+
+            filteredData = allData.filter(row => {
+                let matchDate = true;
+                if (dateVal) {
+                    matchDate = new Date(row._date).toDateString() === new Date(dateVal).toDateString();
+                }
+
+                let matchFile = true;
+                if (fileVal) {
+                    matchFile = row._sessionName === fileVal;
+                }
+
+                return matchDate && matchFile;
+            });
+
+            currentPage = 1;
+            renderTable();
+        }
+
+        function renderTable() {
+            tableBody.innerHTML = '';
+
+            const totalPages = Math.ceil(filteredData.length / rowsPerPage) || 1;
+            if (currentPage > totalPages) currentPage = totalPages;
+
+            const start = (currentPage - 1) * rowsPerPage;
+            const end = start + rowsPerPage;
+            const pageRows = filteredData.slice(start, end);
+
+            if (pageRows.length === 0) {
+                tableBody.innerHTML = '<tr><td colspan="8" style="text-align:center;">No records found</td></tr>';
+                return;
+            }
+
+            pageRows.forEach(row => {
+                const dateStr = new Date(row._date).toLocaleDateString() + ' ' + new Date(row._date).toLocaleTimeString();
+
+                const tr = document.createElement('tr');
+                tr.innerHTML = `
+                     <td style="font-size: 0.8em; white-space: nowrap;">${dateStr}</td>
+                     <td style="font-size: 0.8em;">${row._sessionName}</td>
+                     <td>${row.address}</td>
+                     <td>${row.client_name || '-'}</td>
+                     <td>${row.email}</td>
+                     <td class="price">${row.zillow_estimated_price || '-'}</td>
+                     <td>${row.zipcode || '-'}</td>
+                     <td>${row.property_url ? `<a href="${row.property_url}" target="_blank">View</a>` : '-'}</td>
+                 `;
+                tableBody.appendChild(tr);
+            });
+
+            // Update Controls
+            pageInfo.textContent = `Page ${currentPage} of ${totalPages} (${filteredData.length} items)`;
+            prevBtn.disabled = currentPage === 1;
+            nextBtn.disabled = currentPage === totalPages;
+            paginationControls.style.display = 'flex';
+        }
+
+        // Event Listeners
+        refreshBtn.onclick = fetchSessions;
+        dateFilter.onchange = applyFilter;
+        fileFilter.onchange = applyFilter;
+        clearFilterBtn.onclick = () => {
+            dateFilter.value = '';
+            fileFilter.value = '';
+            applyFilter();
+        };
+
+        rowsPerPageSelect.onchange = (e) => {
+            rowsPerPage = parseInt(e.target.value);
+            currentPage = 1;
+            renderTable();
+        };
+        prevBtn.onclick = () => { if (currentPage > 1) { currentPage--; renderTable(); } };
+        nextBtn.onclick = () => { if (currentPage * rowsPerPage < filteredData.length) { currentPage++; renderTable(); } };
+
+        // Initial Load
+        fetchSessions();
+    </script>
+</body>
+
+</html>
