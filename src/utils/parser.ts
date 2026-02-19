@@ -20,7 +20,7 @@ export const ParseCsv = async (file_path: string): Promise<any> => {
                             address: `${data[4]} ${data[5]} ${data[6]} ${data[7]}`
                         });
                     }
-                    // Check for 5 columns (Data.csv format)
+                    // Check for 5 columns (Data.csv format with separate country)
                     else if (keys.length >= 5) {
                         results.push({
                             name: data[1],
@@ -28,10 +28,15 @@ export const ParseCsv = async (file_path: string): Promise<any> => {
                             address: data[3]
                         });
                     }
-                    // Fallback or ignore
-                    else {
-                        // Try best effor map if needed, or skip
+                    // Check for 4 columns (phone, name, email, address with country in address)
+                    else if (keys.length >= 4) {
+                        results.push({
+                            name: data[1],
+                            email: data[2],
+                            address: data[3]
+                        });
                     }
+                    // Fallback or ignore
                 })
                 .on('end', async () => {
                     resolve(results)

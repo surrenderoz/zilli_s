@@ -7,10 +7,11 @@ import { processAddress } from "./zen_row";
 import { mkConfig, generateCsv, asString } from "export-to-csv";
 import * as XLSX from 'xlsx';
 import csvParser from 'csv-parser';
+import redis from '../lib/redis';
 
 // Configs
-const csvConfig = mkConfig({ useKeysAsHeaders: true, filename: 'processed_data' });
-const appendConfig = mkConfig({ useKeysAsHeaders: false, filename: 'processed_data' }); // No header for append
+const csvConfig = mkConfig({ useKeysAsHeaders: true, filename: 'processed_data', useBom: false });
+const appendConfig = mkConfig({ useKeysAsHeaders: false, filename: 'processed_data', useBom: false }); // No header for append
 
 // Limit removed, set per-session based on message
 
@@ -23,6 +24,9 @@ const uploadStore = new Map<string, {
   processedRows: any[],  // Completed rows
   isStopped: boolean,
   isProcessing: boolean, // Track active loop
+  isPaused: boolean,
+  noLinkCount: number,
+  resumeResolver: (() => void) | null,
   clients: any[]
 }>();
 
@@ -49,7 +53,14 @@ async function initUploadStore() {
             await new Promise((resolve, reject) => {
               createReadStream(processedPath)
                 .pipe(csvParser())
-                .on('data', (d) => processedRows.push(d))
+                .on('data', (d) => {
+                  // Strip BOM and stray quotes from keys
+                  const clean: any = {};
+                  for (const [k, v] of Object.entries(d)) {
+                    clean[k.replace(/^\uFEFF/, '').replace(/^"|"$/g, '')] = v;
+                  }
+                  processedRows.push(clean);
+                })
                 .on('end', resolve)
                 .on('error', reject);
             });
@@ -72,8 +83,11 @@ async function initUploadStore() {
             total: meta.total,
             originalName: meta.originalName,
             processedRows,
-            isStopped: false, // Default to false on restart
+            isStopped: false,
             isProcessing: false,
+            isPaused: false,
+            noLinkCount: 0,
+            resumeResolver: null,
             clients: []
           });
 
@@ -127,6 +141,9 @@ const service = new Elysia()
         processedRows: [],
         isStopped: false,
         isProcessing: false,
+        isPaused: false,
+        noLinkCount: 0,
+        resumeResolver: null,
         clients: []
       });
 
@@ -154,6 +171,11 @@ const service = new Elysia()
 
       if (message.type === 'stop') {
         upload.isStopped = true;
+        // If paused, also resolve the pause so the loop can exit
+        if (upload.resumeResolver) {
+          upload.resumeResolver();
+          upload.resumeResolver = null;
+        }
         upload.clients.forEach(c => c.send({
           type: 'stopped',
           downloadUrl: `/download/csv/${message.id}`,
@@ -170,6 +192,18 @@ const service = new Elysia()
         return;
       }
 
+      if (message.type === 'resume') {
+        if (upload.isPaused && upload.resumeResolver) {
+          console.log(`Session ${message.id}: Resuming from pause...`);
+          upload.isPaused = false;
+          upload.noLinkCount = 0; // Reset counter so it can trigger again
+          upload.resumeResolver();
+          upload.resumeResolver = null;
+          upload.clients.forEach(c => c.send({ type: 'resumed' }));
+        }
+        return;
+      }
+
       if (message.type === 'start') {
         if (upload.isProcessing) {
           console.log(`Session ${message.id}: Already processing.`);
@@ -179,6 +213,7 @@ const service = new Elysia()
         console.log(`Session ${message.id}: Starting/Resuming...`);
         upload.isProcessing = true;
         upload.isStopped = false; // Reset stop flag on start/resume
+        upload.noLinkCount = 0; // Reset no-link counter
 
         try {
           // RESUME LOGIC: Filter out already processed rows
@@ -214,7 +249,12 @@ const service = new Elysia()
             // 2. Define Task
             const task = (async () => {
               try {
-                const res = await processAddress(values.address);
+                const res = await processAddress({
+                  address: values.address,
+                  client_name: values.name,
+                  email: values.email,
+                  file_name: upload.originalName,
+                });
 
                 const processedRow = {
                   client_name: values.name,
@@ -224,11 +264,17 @@ const service = new Elysia()
                   zillow_estimated_price: res?.zillow_estimated_price || "",
                   zipcode: res?.zipcode || "",
                   property_url: res?.property_url || "",
-                  comment: res?.comment || ""
+                  comment: res?.comment || "",
+                  file_name: upload.originalName || ""
                 };
 
                 // Update Memory
                 upload.processedRows.push(processedRow);
+
+                // Track no-link addresses
+                if (res?.comment?.includes('No Zillow link')) {
+                  upload.noLinkCount++;
+                }
 
                 // Append to Disk
                 const processedPath = `uploads/processed_${message.id}.csv`;
@@ -266,7 +312,8 @@ const service = new Elysia()
                   zillow_estimated_price: "-",
                   zipcode: "-",
                   property_url: "",
-                  comment: `Processing Error: ${(e as any).message || e}`
+                  comment: `Processing Error: ${(e as any).message || e}`,
+                  file_name: upload.originalName || ""
                 };
 
                 // Add to memory
@@ -300,6 +347,30 @@ const service = new Elysia()
             // 4. Concurrency Control (Wait if full)
             if (activePromises.length >= concurrency) {
               await Promise.race(activePromises);
+            }
+
+            // 5. Auto-pause check: if 20+ addresses had no Zillow link
+            if (upload.noLinkCount >= 20 && !upload.isPaused && !upload.isStopped) {
+              upload.isPaused = true;
+              console.log(`Session ${message.id}: Auto-paused — ${upload.noLinkCount} addresses had no Zillow link.`);
+
+              // Wait for in-flight requests to finish before pausing
+              await Promise.all(activePromises);
+
+              upload.clients.forEach(c => c.send({
+                type: 'paused',
+                noLinkCount: upload.noLinkCount,
+                processed: upload.processedRows.length,
+                total: upload.total
+              }));
+
+              // Block the loop until resume or stop
+              await new Promise<void>((resolve) => {
+                upload.resumeResolver = resolve;
+              });
+
+              // After resume — check if we were stopped while paused
+              if (upload.isStopped) break;
             }
           }
 
@@ -418,7 +489,8 @@ const service = new Elysia()
         { header: 'Zestimate', key: 'zillow_estimated_price', width: 15 },
         { header: 'Zipcode', key: 'zipcode', width: 10 },
         { header: 'URL', key: 'property_url', width: 50 },
-        { header: 'Comment', key: 'comment', width: 30 }
+        { header: 'Comment', key: 'comment', width: 30 },
+        { header: 'File Name', key: 'file_name', width: 30 }
       ];
 
       // Style Header
@@ -475,7 +547,9 @@ const service = new Elysia()
       processed: upload.processedRows.length,
       rows: upload.processedRows,
       isStopped: upload.isStopped,
-      isProcessing: upload.isProcessing // Expose processing status
+      isPaused: upload.isPaused,
+      noLinkCount: upload.noLinkCount,
+      isProcessing: upload.isProcessing
     };
   })
   // 5. List Sessions
@@ -533,6 +607,230 @@ const service = new Elysia()
     sessions.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
 
     return sessions;
+  })
+  // 6. Usage Password Management
+  .get("/api/usage/check-password", async () => {
+    const pwFile = "uploads/.usage_password.json";
+    if (!existsSync(pwFile)) {
+      return { hasPassword: false };
+    }
+    return { hasPassword: true };
+  })
+  .post("/api/usage/set-password", async ({ body }: any) => {
+    const pwFile = "uploads/.usage_password.json";
+    const { password } = body as { password: string };
+    if (!password || password.length < 4) {
+      return { error: "Password must be at least 4 characters" };
+    }
+    // Hash with simple base64 encoding (not production-grade, but sufficient for local tool)
+    const encoded = Buffer.from(password).toString("base64");
+    await writeFile(pwFile, JSON.stringify({ hash: encoded }));
+    return { success: true };
+  })
+  .post("/api/usage/verify", async ({ body }: any) => {
+    const pwFile = "uploads/.usage_password.json";
+    if (!existsSync(pwFile)) {
+      return { error: "No password set" };
+    }
+    const { password } = body as { password: string };
+    const stored = JSON.parse(await readFile(pwFile, "utf-8"));
+    const encoded = Buffer.from(password).toString("base64");
+    if (encoded === stored.hash) {
+      return { success: true };
+    }
+    return { error: "Incorrect password" };
+  })
+  // 7. ZenRows Usage/Analytics (password required via header)
+  .get("/api/usage", async ({ headers }: any) => {
+    // Check password
+    const pwFile = "uploads/.usage_password.json";
+    if (existsSync(pwFile)) {
+      const pw = headers["x-usage-password"] || "";
+      const stored = JSON.parse(await readFile(pwFile, "utf-8"));
+      const encoded = Buffer.from(pw).toString("base64");
+      if (encoded !== stored.hash) {
+        return { error: "Unauthorized", code: 401 };
+      }
+    }
+
+    try {
+      const axios = (await import("axios")).default;
+      const apiKey = process.env.API_KEY || "";
+
+      const res = await axios.get("https://api.zenrows.com/v1/subscriptions/self/details", {
+        headers: {
+          "X-API-Key": apiKey,
+        }
+      });
+
+      return res.data;
+    } catch (err: any) {
+      console.error("ZenRows usage fetch error:", err.message);
+      return { error: "Failed to fetch usage data", details: err.message };
+    }
+  })
+  // 8. Redis-backed Results (persist after session delete)
+  .get("/api/results", async ({ query }: any) => {
+    try {
+      const keys = await redis.smembers("result_keys");
+      if (!keys || keys.length === 0) return { rows: [], total: 0 };
+
+      const pipeline = redis.pipeline();
+      keys.forEach(k => pipeline.get(k));
+      const results = await pipeline.exec();
+
+      let rows = (results || [])
+        .map(([err, val]) => (err || !val) ? null : JSON.parse(val as string))
+        .filter(Boolean);
+
+      // Apply filters
+      if (query.file_name) {
+        rows = rows.filter((r: any) => r.file_name === query.file_name);
+      }
+      if (query.date) {
+        const filterDate = new Date(query.date).toDateString();
+        rows = rows.filter((r: any) => r.savedAt && new Date(r.savedAt).toDateString() === filterDate);
+      }
+
+      // Sort by date desc
+      rows.sort((a: any, b: any) => new Date(b.savedAt || 0).getTime() - new Date(a.savedAt || 0).getTime());
+
+      return { rows, total: rows.length };
+    } catch (err: any) {
+      console.error("Redis results fetch error:", err.message);
+      return { error: "Failed to fetch results", details: err.message };
+    }
+  })
+  .get("/api/results/files", async () => {
+    try {
+      const keys = await redis.smembers("result_keys");
+      if (!keys || keys.length === 0) return { files: [] };
+
+      const pipeline = redis.pipeline();
+      keys.forEach(k => pipeline.get(k));
+      const results = await pipeline.exec();
+
+      const fileSet = new Set<string>();
+      (results || []).forEach(([err, val]) => {
+        if (!err && val) {
+          const parsed = JSON.parse(val as string);
+          if (parsed.file_name) fileSet.add(parsed.file_name);
+        }
+      });
+
+      return { files: [...fileSet].sort() };
+    } catch (err: any) {
+      return { error: "Failed to fetch file list", details: err.message };
+    }
+  })
+  .get("/api/results/export/:fileName", async ({ params: { fileName } }: any) => {
+    try {
+      const decodedName = decodeURIComponent(fileName);
+      const keys = await redis.smembers("result_keys");
+      if (!keys || keys.length === 0) return { error: "No data found" };
+
+      const pipeline = redis.pipeline();
+      keys.forEach(k => pipeline.get(k));
+      const results = await pipeline.exec();
+
+      const rows = (results || [])
+        .map(([err, val]) => (err || !val) ? null : JSON.parse(val as string))
+        .filter((r: any) => r && r.file_name === decodedName)
+        .sort((a: any, b: any) => new Date(b.savedAt || 0).getTime() - new Date(a.savedAt || 0).getTime());
+
+      if (rows.length === 0) {
+        return { error: "No data found for this file" };
+      }
+
+      // Sort by highest Zestimate first
+      rows.sort((a: any, b: any) => {
+        const priceA = parseInt(String(a.zillow_estimated_price || '').replace(/[^0-9]/g, '') || '0');
+        const priceB = parseInt(String(b.zillow_estimated_price || '').replace(/[^0-9]/g, '') || '0');
+        return priceB - priceA;
+      });
+
+      // Use ExcelJS for styled export
+      const ExcelJS = require('exceljs');
+      const workbook = new ExcelJS.Workbook();
+      const sheet = workbook.addWorksheet('Zillow Results');
+
+      // Define columns
+      sheet.columns = [
+        { header: 'Client Name', key: 'client_name', width: 22 },
+        { header: 'Email', key: 'email', width: 30 },
+        { header: 'Address', key: 'address', width: 42 },
+        { header: 'Zillow Address', key: 'zillow_address', width: 35 },
+        { header: 'Zestimate', key: 'zillow_estimated_price', width: 16 },
+        { header: 'Zipcode', key: 'zipcode', width: 12 },
+        { header: 'URL', key: 'property_url', width: 50 },
+        { header: 'Comment', key: 'comment', width: 30 },
+        { header: 'Date', key: 'date', width: 22 },
+      ];
+
+      // Style header row
+      const headerRow = sheet.getRow(1);
+      headerRow.font = { bold: true, color: { argb: 'FFFFFFFF' }, size: 12 };
+      headerRow.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1a73e8' } };
+      headerRow.alignment = { vertical: 'middle', horizontal: 'center' };
+      headerRow.height = 28;
+
+      // Add data rows
+      rows.forEach((r: any, idx: number) => {
+        const row = sheet.addRow({
+          client_name: r.client_name || '',
+          email: r.email || '',
+          address: r.address || '',
+          zillow_address: r.zillow_address || '',
+          zillow_estimated_price: r.zillow_estimated_price || '',
+          zipcode: r.zipcode || '',
+          property_url: r.property_url || '',
+          comment: r.comment || '',
+          date: r.savedAt ? new Date(r.savedAt).toLocaleString() : '',
+        });
+
+        // Alternate row colors
+        if (idx % 2 === 0) {
+          row.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF2F6FC' } };
+        }
+
+        // Hyperlink URLs
+        if (r.property_url && r.property_url.startsWith('http')) {
+          row.getCell('property_url').value = { text: r.property_url, hyperlink: r.property_url };
+          row.getCell('property_url').font = { color: { argb: 'FF0000FF' }, underline: true };
+        }
+      });
+
+      // Add borders to all cells
+      sheet.eachRow((row: any) => {
+        row.eachCell((cell: any) => {
+          cell.border = {
+            top: { style: 'thin', color: { argb: 'FFD0D0D0' } },
+            bottom: { style: 'thin', color: { argb: 'FFD0D0D0' } },
+            left: { style: 'thin', color: { argb: 'FFD0D0D0' } },
+            right: { style: 'thin', color: { argb: 'FFD0D0D0' } },
+          };
+        });
+      });
+
+      // Auto-filter on header
+      sheet.autoFilter = { from: 'A1', to: `I${rows.length + 1}` };
+
+      const buf = await workbook.xlsx.writeBuffer();
+      const tmpPath = `uploads/export_${Date.now()}.xlsx`;
+      await Bun.write(tmpPath, buf);
+      const file = Bun.file(tmpPath);
+      const response = new Response(file, {
+        headers: {
+          "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+          "Content-Disposition": `attachment; filename="${decodedName.replace('.csv', '')}_results.xlsx"`,
+        }
+      });
+      setTimeout(() => unlink(tmpPath).catch(() => { }), 30000);
+      return response;
+    } catch (err: any) {
+      console.error("Export error:", err.message);
+      return { error: "Failed to export", details: err.message };
+    }
   });
 
 export default service;

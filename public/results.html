@@ -120,6 +120,8 @@
                 <a href="/" class="nav-link">Home</a>
                 <span style="color: #ccc; margin: 0 10px;">|</span>
                 <span style="font-weight: bold;">Results</span>
+                <span style="color: #ccc; margin: 0 10px;">|</span>
+                <a href="/usage" class="nav-link">Usage</a>
             </div>
         </div>
 
@@ -135,7 +137,19 @@
                 </select>
             </label>
             <button id="clearFilterBtn" class="secondary">Clear</button>
+            <button id="exportXlsxBtn"
+                style="margin-left: 10px; background: #1a73e8; color: white; border: none; border-radius: 4px; padding: 6px 16px; cursor: pointer; display: none;">📥
+                Export XLSX</button>
+            <button id="manageSessionsBtn" class="secondary"
+                style="margin-left: 10px; background: #d32f2f; color: white;" onclick="toggleSessionPanel()">🗑 Manage
+                Sessions</button>
             <button id="refreshBtn" style="margin-left: auto;">Refresh Data</button>
+        </div>
+
+        <div id="sessionPanel"
+            style="display: none; background: #fff3cd; border: 1px solid #ffc107; border-radius: 8px; padding: 1rem; margin-bottom: 1rem;">
+            <strong>Sessions</strong>
+            <div id="sessionList" style="margin-top: 0.5rem;"></div>
         </div>
 
         <div id="loading" style="text-align: center; display: none;">Loading...</div>
@@ -149,6 +163,7 @@
                         <th>Address</th>
                         <th>Client</th>
                         <th>Email</th>
+                        <th>Zillow Address</th>
                         <th style="cursor: pointer;" onclick="toggleSort('price')">Zestimate ↕</th>
                         <th>Zipcode</th>
                         <th>URL</th>
@@ -184,6 +199,7 @@
         const fileFilter = document.getElementById('fileFilter');
         const clearFilterBtn = document.getElementById('clearFilterBtn');
         const refreshBtn = document.getElementById('refreshBtn');
+        const exportXlsxBtn = document.getElementById('exportXlsxBtn');
         const tableBody = document.getElementById('tableBody');
         const loading = document.getElementById('loading');
 
@@ -193,23 +209,34 @@
         const nextBtn = document.getElementById('nextBtn');
         const pageInfo = document.getElementById('pageInfo');
 
-        let allSessions = [];
-        let allData = []; // Flattened rows
+        let allSessions = []; // For session management panel only
+        let allData = [];
         let filteredData = [];
-        let sortDir = 'desc'; // Default Sort by Price Desc
+        let sortDir = 'desc';
 
         let currentPage = 1;
         let rowsPerPage = 25;
 
-        async function fetchSessions() {
+        async function fetchData() {
             try {
                 loading.style.display = 'block';
-                const res = await fetch('/sessions');
-                allSessions = await res.json();
 
-                // Populate File Filter
+                // Fetch data from DB
+                const res = await fetch('/api/results');
+                const json = await res.json();
+
+                if (json.error) {
+                    throw new Error(json.error);
+                }
+
+                allData = json.rows || [];
+
+                // Fetch distinct file names for filter
+                const filesRes = await fetch('/api/results/files');
+                const filesJson = await filesRes.json();
+                const files = filesJson.files || [];
+
                 fileFilter.innerHTML = '<option value="">All Files</option>';
-                const files = [...new Set(allSessions.map(s => s.originalName))].sort();
                 files.forEach(f => {
                     const op = document.createElement('option');
                     op.value = f;
@@ -217,38 +244,18 @@
                     fileFilter.appendChild(op);
                 });
 
-                // Fetch details for each session to flatten
-                // NOTE: For very large datasets, this should be server-side or lazy loaded.
-                // Assuming reasonable size for now as per instructions.
-                allData = [];
-
-                const fetchPromises = allSessions.map(async (session) => {
-                    try {
-                        // We use the download CSV endpoint to get full data or status endpoint if it includes rows
-                        const res = await fetch(`/status/${session.id}`);
-                        const data = await res.json();
-                        if (data.rows && Array.isArray(data.rows)) {
-                            return data.rows.map(row => ({
-                                ...row,
-                                _sessionId: session.id,
-                                _sessionName: session.originalName,
-                                _date: session.createdAt
-                            }));
-                        }
-                        return [];
-                    } catch (e) { console.error(e); return []; }
-                });
-
-                const results = await Promise.all(fetchPromises);
-                allData = results.flat();
+                // Also fetch sessions for the manage panel
+                try {
+                    const sessRes = await fetch('/sessions');
+                    allSessions = await sessRes.json();
+                } catch (e) { allSessions = []; }
 
                 // Sort by Price Desc by default
                 sortData();
-
                 applyFilter();
             } catch (error) {
                 console.error('Error fetching data:', error);
-                tableBody.innerHTML = '<tr><td colspan="8" style="color:red; text-align:center;">Failed to load data</td></tr>';
+                tableBody.innerHTML = '<tr><td colspan="9" style="color:red; text-align:center;">Failed to load data</td></tr>';
             } finally {
                 loading.style.display = 'none';
             }
@@ -257,7 +264,7 @@
         function toggleSort() {
             sortDir = sortDir === 'desc' ? 'asc' : 'desc';
             sortData();
-            applyFilter(); // Re-render
+            applyFilter();
         }
 
         function sortData() {
@@ -275,16 +282,31 @@
             filteredData = allData.filter(row => {
                 let matchDate = true;
                 if (dateVal) {
-                    matchDate = new Date(row._date).toDateString() === new Date(dateVal).toDateString();
+                    matchDate = new Date(row.savedAt).toDateString() === new Date(dateVal).toDateString();
                 }
 
                 let matchFile = true;
                 if (fileVal) {
-                    matchFile = row._sessionName === fileVal;
+                    matchFile = row.file_name === fileVal;
                 }
 
                 return matchDate && matchFile;
             });
+
+            // Show/hide export button based on file filter
+            if (fileVal) {
+                exportXlsxBtn.style.display = 'inline-block';
+                exportXlsxBtn.onclick = () => {
+                    const a = document.createElement('a');
+                    a.href = `/api/results/export/${encodeURIComponent(fileVal)}`;
+                    a.download = fileVal.replace('.csv', '') + '_results.xlsx';
+                    document.body.appendChild(a);
+                    a.click();
+                    document.body.removeChild(a);
+                };
+            } else {
+                exportXlsxBtn.style.display = 'none';
+            }
 
             currentPage = 1;
             renderTable();
@@ -301,20 +323,23 @@
             const pageRows = filteredData.slice(start, end);
 
             if (pageRows.length === 0) {
-                tableBody.innerHTML = '<tr><td colspan="8" style="text-align:center;">No records found</td></tr>';
+                tableBody.innerHTML = '<tr><td colspan="9" style="text-align:center;">No records found</td></tr>';
                 return;
             }
 
             pageRows.forEach(row => {
-                const dateStr = new Date(row._date).toLocaleDateString() + ' ' + new Date(row._date).toLocaleTimeString();
+                const dateStr = row.savedAt
+                    ? new Date(row.savedAt).toLocaleDateString() + ' ' + new Date(row.savedAt).toLocaleTimeString()
+                    : '-';
 
                 const tr = document.createElement('tr');
                 tr.innerHTML = `
                      <td style="font-size: 0.8em; white-space: nowrap;">${dateStr}</td>
-                     <td style="font-size: 0.8em;">${row._sessionName}</td>
-                     <td>${row.address}</td>
+                     <td style="font-size: 0.8em;">${row.file_name || '-'}</td>
+                     <td>${row.address || '-'}</td>
                      <td>${row.client_name || '-'}</td>
-                     <td>${row.email}</td>
+                     <td>${row.email || '-'}</td>
+                     <td>${row.zillow_address || '-'}</td>
                      <td class="price">${row.zillow_estimated_price || '-'}</td>
                      <td>${row.zipcode || '-'}</td>
                      <td>${row.property_url ? `<a href="${row.property_url}" target="_blank">View</a>` : '-'}</td>
@@ -330,7 +355,59 @@
         }
 
         // Event Listeners
-        refreshBtn.onclick = fetchSessions;
+        refreshBtn.onclick = fetchData;
+
+        function toggleSessionPanel() {
+            const panel = document.getElementById('sessionPanel');
+            if (panel.style.display === 'none') {
+                panel.style.display = 'block';
+                renderSessionList();
+            } else {
+                panel.style.display = 'none';
+            }
+        }
+
+        function renderSessionList() {
+            const list = document.getElementById('sessionList');
+            if (!allSessions || allSessions.length === 0) {
+                list.innerHTML = '<p style="color:#666;">No sessions found.</p>';
+                return;
+            }
+            list.innerHTML = allSessions.map(s => {
+                const date = s.createdAt ? new Date(s.createdAt).toLocaleString() : 'Unknown';
+                return `<div style="display: flex; align-items: center; justify-content: space-between; padding: 0.5rem; margin: 0.25rem 0; background: white; border-radius: 4px; border: 1px solid #ddd;">
+                    <div>
+                        <strong>${s.originalName}</strong>
+                        <span style="color: #666; font-size: 0.85em; margin-left: 8px;">${date} · ${s.processed}/${s.total} rows</span>
+                    </div>
+                    <button onclick="deleteSession('${s.id}')" style="background: #d32f2f; color: white; border: none; border-radius: 4px; padding: 4px 12px; cursor: pointer; font-size: 0.85em;">Delete</button>
+                </div>`;
+            }).join('');
+        }
+
+        async function deleteSession(id) {
+            if (!confirm('Delete this session? This cannot be undone.')) return;
+            try {
+                const res = await fetch(`/session/${id}`, { method: 'DELETE' });
+                if (res.ok) {
+                    if (localStorage.getItem('zillow_upload_id') === id) {
+                        localStorage.removeItem('zillow_upload_id');
+                    }
+                    // Refresh sessions list
+                    try {
+                        const sessRes = await fetch('/sessions');
+                        allSessions = await sessRes.json();
+                    } catch (e) { allSessions = []; }
+                    renderSessionList();
+                } else {
+                    alert('Failed to delete session');
+                }
+            } catch (e) {
+                console.error(e);
+                alert('Error deleting session');
+            }
+        }
+
         dateFilter.onchange = applyFilter;
         fileFilter.onchange = applyFilter;
         clearFilterBtn.onclick = () => {
@@ -348,8 +425,9 @@
         nextBtn.onclick = () => { if (currentPage * rowsPerPage < filteredData.length) { currentPage++; renderTable(); } };
 
         // Initial Load
-        fetchSessions();
+        fetchData();
     </script>
+
 </body>
 
 </html>

@@ -9,6 +9,7 @@ app.use(Service)
 // app.use(staticPlugin({ assets: 'public' }))
 app.get("/", () => Bun.file("public/index.html"))
     .get("/results", () => Bun.file("public/results.html"))
+    .get("/usage", () => Bun.file("public/usage.html"))
     .use(swagger())
     .listen(3006);
 

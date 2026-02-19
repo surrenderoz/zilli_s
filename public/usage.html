@@ -1,0 +1,821 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ZenRows API Usage Analytics</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 2rem;
+            background-color: #f5f5f7;
+            color: #1d1d1f;
+        }
+
+        .container {
+            background: white;
+            padding: 2rem;
+            border-radius: 12px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+        }
+
+        .header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 2rem;
+            flex-wrap: wrap;
+            gap: 0.75rem;
+        }
+
+        h1 {
+            margin: 0;
+            color: #006aff;
+        }
+
+        .nav-links {
+            display: flex;
+            gap: 0.75rem;
+            align-items: center;
+        }
+
+        .nav-link {
+            text-decoration: none;
+            color: #006aff;
+            font-weight: 500;
+        }
+
+        .nav-link:hover {
+            text-decoration: underline;
+        }
+
+        .nav-sep {
+            color: #ccc;
+        }
+
+        /* Stats Grid */
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+            gap: 1.25rem;
+            margin-bottom: 2rem;
+        }
+
+        .stat-card {
+            background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
+            border-radius: 10px;
+            padding: 1.25rem;
+            display: flex;
+            flex-direction: column;
+            gap: 0.5rem;
+        }
+
+        .stat-card.primary {
+            background: linear-gradient(135deg, #006aff 0%, #0052cc 100%);
+            color: white;
+        }
+
+        .stat-card.success {
+            background: linear-gradient(135deg, #2e7d32 0%, #1b5e20 100%);
+            color: white;
+        }
+
+        .stat-card.warning {
+            background: linear-gradient(135deg, #f57c00 0%, #e65100 100%);
+            color: white;
+        }
+
+        .stat-card.danger {
+            background: linear-gradient(135deg, #d32f2f 0%, #b71c1c 100%);
+            color: white;
+        }
+
+        .stat-label {
+            font-size: 0.8rem;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            opacity: 0.85;
+            font-weight: 600;
+        }
+
+        .stat-value {
+            font-size: 1.8rem;
+            font-weight: 700;
+            line-height: 1;
+        }
+
+        .stat-sub {
+            font-size: 0.75rem;
+            opacity: 0.7;
+        }
+
+        /* Progress Bar */
+        .usage-bar-container {
+            margin-bottom: 2rem;
+        }
+
+        .usage-bar-container h3 {
+            margin-bottom: 0.75rem;
+            color: #333;
+        }
+
+        .usage-bar-bg {
+            background: #e9ecef;
+            border-radius: 10px;
+            height: 28px;
+            overflow: hidden;
+            position: relative;
+        }
+
+        .usage-bar-fill {
+            height: 100%;
+            border-radius: 10px;
+            transition: width 0.8s ease;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 0.75rem;
+            font-weight: 700;
+            color: white;
+            min-width: 40px;
+        }
+
+        .usage-bar-fill.low {
+            background: linear-gradient(90deg, #2e7d32, #43a047);
+        }
+
+        .usage-bar-fill.medium {
+            background: linear-gradient(90deg, #f57c00, #fb8c00);
+        }
+
+        .usage-bar-fill.high {
+            background: linear-gradient(90deg, #d32f2f, #e53935);
+        }
+
+        /* Details Table */
+        .details-section {
+            margin-top: 2rem;
+        }
+
+        .details-section h3 {
+            margin-bottom: 1rem;
+            color: #333;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.9rem;
+        }
+
+        th,
+        td {
+            padding: 10px 14px;
+            border-bottom: 1px solid #e9ecef;
+            text-align: left;
+        }
+
+        th {
+            background-color: #f8f9fa;
+            font-weight: 600;
+            color: #495057;
+        }
+
+        tr:hover {
+            background-color: #f8f9fa;
+        }
+
+        /* Loading & Error */
+        .loading {
+            text-align: center;
+            padding: 3rem;
+            color: #666;
+            font-size: 1.1rem;
+        }
+
+        .loading .spinner {
+            display: inline-block;
+            width: 24px;
+            height: 24px;
+            border: 3px solid #e9ecef;
+            border-top: 3px solid #006aff;
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+            margin-right: 8px;
+            vertical-align: middle;
+        }
+
+        @keyframes spin {
+            to {
+                transform: rotate(360deg);
+            }
+        }
+
+        .error-msg {
+            background: #fff3f3;
+            border: 1px solid #ffcdd2;
+            color: #d32f2f;
+            padding: 1rem;
+            border-radius: 8px;
+            text-align: center;
+        }
+
+        .refresh-btn {
+            padding: 0.5rem 1.25rem;
+            background: #006aff;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 0.9rem;
+            font-weight: 500;
+            transition: background 0.2s;
+        }
+
+        .refresh-btn:hover {
+            background: #0052cc;
+        }
+
+        /* Password UI */
+        .auth-overlay {
+            position: fixed;
+            inset: 0;
+            background: rgba(0, 0, 0, 0.5);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 1000;
+            backdrop-filter: blur(4px);
+        }
+
+        .auth-box {
+            background: white;
+            border-radius: 12px;
+            padding: 2rem;
+            width: 380px;
+            max-width: 90vw;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
+        }
+
+        .auth-box h2 {
+            margin-bottom: 0.5rem;
+            color: #1d1d1f;
+        }
+
+        .auth-box p {
+            color: #666;
+            font-size: 0.9rem;
+            margin-bottom: 1.25rem;
+        }
+
+        .auth-box input {
+            width: 100%;
+            padding: 0.7rem 1rem;
+            border: 1.5px solid #dee2e6;
+            border-radius: 8px;
+            font-size: 1rem;
+            outline: none;
+            transition: border-color 0.2s;
+        }
+
+        .auth-box input:focus {
+            border-color: #006aff;
+        }
+
+        .auth-box .auth-btn {
+            width: 100%;
+            margin-top: 1rem;
+            padding: 0.7rem;
+            background: #006aff;
+            color: white;
+            border: none;
+            border-radius: 8px;
+            font-size: 1rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+
+        .auth-box .auth-btn:hover {
+            background: #0052cc;
+        }
+
+        .auth-error {
+            color: #d32f2f;
+            font-size: 0.85rem;
+            margin-top: 0.5rem;
+            display: none;
+        }
+
+        /* Filter bar */
+        .filter-bar {
+            display: flex;
+            gap: 0.75rem;
+            align-items: center;
+            margin-bottom: 1.5rem;
+            flex-wrap: wrap;
+        }
+
+        .filter-bar label {
+            font-size: 0.85rem;
+            font-weight: 600;
+            color: #495057;
+        }
+
+        .filter-bar select,
+        .filter-bar input[type="date"] {
+            padding: 0.4rem 0.75rem;
+            border: 1.5px solid #dee2e6;
+            border-radius: 6px;
+            font-size: 0.85rem;
+            background: white;
+            outline: none;
+        }
+
+        .filter-bar select:focus,
+        .filter-bar input[type="date"]:focus {
+            border-color: #006aff;
+        }
+
+        /* Raw JSON toggle */
+        .raw-toggle {
+            margin-top: 1.5rem;
+            text-align: center;
+        }
+
+        .raw-toggle button {
+            padding: 0.4rem 1rem;
+            background: #6c757d;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 0.8rem;
+        }
+
+        .raw-json {
+            display: none;
+            margin-top: 1rem;
+            background: #1d1d1f;
+            color: #a5d6a7;
+            padding: 1rem;
+            border-radius: 8px;
+            font-family: 'Menlo', 'Monaco', monospace;
+            font-size: 0.8rem;
+            overflow-x: auto;
+            white-space: pre-wrap;
+            max-height: 400px;
+            overflow-y: auto;
+        }
+
+        .lock-btn {
+            padding: 0.5rem 1rem;
+            background: #6c757d;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 0.8rem;
+        }
+
+        .lock-btn:hover {
+            background: #5a6268;
+        }
+    </style>
+</head>
+
+<body>
+    <!-- Auth Overlay -->
+    <div class="auth-overlay" id="authOverlay" style="display: none;">
+        <div class="auth-box">
+            <h2 id="authTitle">🔒 Set Password</h2>
+            <p id="authDesc">Set a password to protect the usage analytics page.</p>
+            <input type="password" id="authPassword" placeholder="Enter password" autocomplete="off">
+            <div class="auth-error" id="authError"></div>
+            <button class="auth-btn" id="authBtn" onclick="handleAuth()">Set Password</button>
+        </div>
+    </div>
+
+    <div class="container">
+        <div class="header">
+            <h1>📊 API Usage</h1>
+            <div class="nav-links">
+                <a href="/" class="nav-link">Home</a>
+                <span class="nav-sep">|</span>
+                <a href="/results" class="nav-link">Results</a>
+                <span class="nav-sep">|</span>
+                <span style="font-weight: bold;">Usage</span>
+                <span class="nav-sep" style="margin-left: 0.5rem;">|</span>
+                <button class="refresh-btn" onclick="fetchUsage()">Refresh</button>
+                <button class="lock-btn" id="lockBtn" onclick="lockPage()" style="display: none;">🔒 Lock</button>
+            </div>
+        </div>
+
+        <!-- Date Filters -->
+        <div class="filter-bar" id="filterBar" style="display: none;">
+            <label>Filter by:</label>
+            <select id="filterType" onchange="handleFilterChange()">
+                <option value="all">All Time</option>
+                <option value="day">By Day</option>
+                <option value="month">By Month</option>
+            </select>
+            <input type="date" id="filterDate" style="display: none;" onchange="applyDateFilter()">
+            <input type="month" id="filterMonth" style="display: none;" onchange="applyDateFilter()">
+        </div>
+
+        <div id="content">
+            <div class="loading" id="loadingState">
+                <span class="spinner"></span> Loading usage data from ZenRows...
+            </div>
+        </div>
+
+        <div class="raw-toggle">
+            <button onclick="toggleRaw()">Toggle Raw JSON</button>
+        </div>
+        <pre class="raw-json" id="rawJson"></pre>
+    </div>
+
+    <script>
+        let rawData = null;
+        let sessionPassword = '';
+        let isSetup = false;
+
+        function formatNumber(n) {
+            if (n === null || n === undefined) return '-';
+            return n.toLocaleString();
+        }
+
+        function formatDate(d) {
+            if (!d) return '-';
+            return new Date(d).toLocaleDateString('en-US', {
+                year: 'numeric', month: 'short', day: 'numeric'
+            });
+        }
+
+        function getBarClass(percent) {
+            if (percent >= 80) return 'high';
+            if (percent >= 50) return 'medium';
+            return 'low';
+        }
+
+        // ---- Auth Flow ----
+        async function checkAuth() {
+            try {
+                const res = await fetch('/api/usage/check-password');
+                const data = await res.json();
+
+                if (!data.hasPassword) {
+                    // No password set — show setup dialog
+                    isSetup = true;
+                    document.getElementById('authTitle').textContent = '🔐 Set Password';
+                    document.getElementById('authDesc').textContent = 'Set a password to protect the usage analytics page.';
+                    document.getElementById('authBtn').textContent = 'Set Password';
+                    document.getElementById('authOverlay').style.display = 'flex';
+                } else {
+                    // Has password — check if we have one in session
+                    if (!sessionPassword) {
+                        isSetup = false;
+                        document.getElementById('authTitle').textContent = '🔒 Enter Password';
+                        document.getElementById('authDesc').textContent = 'This page is password protected.';
+                        document.getElementById('authBtn').textContent = 'Unlock';
+                        document.getElementById('authOverlay').style.display = 'flex';
+                    } else {
+                        showApp();
+                    }
+                }
+            } catch (e) {
+                // If check fails, just show the app
+                showApp();
+            }
+        }
+
+        async function handleAuth() {
+            const pw = document.getElementById('authPassword').value.trim();
+            const errEl = document.getElementById('authError');
+
+            if (!pw) {
+                errEl.textContent = 'Please enter a password';
+                errEl.style.display = 'block';
+                return;
+            }
+
+            if (isSetup) {
+                if (pw.length < 4) {
+                    errEl.textContent = 'Password must be at least 4 characters';
+                    errEl.style.display = 'block';
+                    return;
+                }
+                const res = await fetch('/api/usage/set-password', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ password: pw })
+                });
+                const data = await res.json();
+                if (data.error) {
+                    errEl.textContent = data.error;
+                    errEl.style.display = 'block';
+                    return;
+                }
+                sessionPassword = pw;
+                document.getElementById('authOverlay').style.display = 'none';
+                showApp();
+            } else {
+                const res = await fetch('/api/usage/verify', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ password: pw })
+                });
+                const data = await res.json();
+                if (data.error) {
+                    errEl.textContent = data.error === 'Incorrect password' ? 'Incorrect password' : data.error;
+                    errEl.style.display = 'block';
+                    return;
+                }
+                sessionPassword = pw;
+                document.getElementById('authOverlay').style.display = 'none';
+                showApp();
+            }
+        }
+
+        // Handle Enter key in password field
+        document.getElementById('authPassword').addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') handleAuth();
+        });
+
+        function lockPage() {
+            sessionPassword = '';
+            document.getElementById('authPassword').value = '';
+            document.getElementById('authError').style.display = 'none';
+            isSetup = false;
+            document.getElementById('authTitle').textContent = '🔒 Enter Password';
+            document.getElementById('authDesc').textContent = 'This page is password protected.';
+            document.getElementById('authBtn').textContent = 'Unlock';
+            document.getElementById('authOverlay').style.display = 'flex';
+            document.getElementById('lockBtn').style.display = 'none';
+            document.getElementById('filterBar').style.display = 'none';
+            document.getElementById('content').innerHTML = '';
+        }
+
+        function showApp() {
+            document.getElementById('lockBtn').style.display = 'inline-block';
+            document.getElementById('filterBar').style.display = 'flex';
+            fetchUsage();
+        }
+
+        // ---- Date Filters ----
+        function handleFilterChange() {
+            const type = document.getElementById('filterType').value;
+            document.getElementById('filterDate').style.display = type === 'day' ? 'inline-block' : 'none';
+            document.getElementById('filterMonth').style.display = type === 'month' ? 'inline-block' : 'none';
+
+            if (type === 'day') {
+                document.getElementById('filterDate').value = new Date().toISOString().split('T')[0];
+            } else if (type === 'month') {
+                document.getElementById('filterMonth').value = new Date().toISOString().slice(0, 7);
+            }
+
+            if (type === 'all') {
+                // Re-render with full data
+                if (rawData) renderUsage(rawData);
+            }
+        }
+
+        function applyDateFilter() {
+            if (!rawData) return;
+            renderUsage(rawData);
+        }
+
+        function filterTopUps(topUps) {
+            const type = document.getElementById('filterType').value;
+            if (type === 'all' || !topUps) return topUps;
+
+            if (type === 'day') {
+                const dateVal = document.getElementById('filterDate').value;
+                if (!dateVal) return topUps;
+                return topUps.filter(t => {
+                    const d = new Date(t.purchase_date).toISOString().split('T')[0];
+                    return d === dateVal;
+                });
+            }
+
+            if (type === 'month') {
+                const monthVal = document.getElementById('filterMonth').value;
+                if (!monthVal) return topUps;
+                return topUps.filter(t => {
+                    const d = new Date(t.purchase_date).toISOString().slice(0, 7);
+                    return d === monthVal;
+                });
+            }
+
+            return topUps;
+        }
+
+        function getFilterLabel() {
+            const type = document.getElementById('filterType').value;
+            if (type === 'day') {
+                const d = document.getElementById('filterDate').value;
+                return d ? ` on ${formatDate(d)}` : '';
+            }
+            if (type === 'month') {
+                const m = document.getElementById('filterMonth').value;
+                if (!m) return '';
+                const [y, mo] = m.split('-');
+                const date = new Date(parseInt(y), parseInt(mo) - 1, 1);
+                return ` in ${date.toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}`;
+            }
+            return '';
+        }
+
+        // ---- Render ----
+        function renderUsage(data) {
+            rawData = data;
+            document.getElementById('rawJson').textContent = JSON.stringify(data, null, 2);
+
+            if (data.error) {
+                document.getElementById('content').innerHTML = `
+                    <div class="error-msg">
+                        <strong>Error:</strong> ${data.error}<br>
+                        <small>${data.details || ''}</small>
+                    </div>`;
+                return;
+            }
+
+            // Map from actual ZenRows response
+            const planName = data.plan?.name || 'N/A';
+            const status = data.status || 'unknown';
+            const usagePercent = data.usage_percent ?? 0;
+            const totalUsageDollars = data.usage ?? 0;
+            const planPrice = data.plan?.price ?? 0;
+            const recurrence = data.plan?.recurrence || '';
+
+            // Calculate total budget = plan price + sum of top-ups
+            const topUps = data.top_ups || [];
+            const topUpTotal = topUps.reduce((sum, t) => sum + (t.price || 0), 0);
+            const totalBudget = planPrice + topUpTotal;
+            const remainingDollars = Math.max(0, totalBudget - totalUsageDollars).toFixed(2);
+            const actualPercent = totalBudget > 0 ? Math.round((totalUsageDollars / totalBudget) * 100) : 0;
+
+            // Products breakdown
+            const products = data.plan?.products || {};
+            const apiProduct = products.api || {};
+            const concurrencyLimit = apiProduct.concurrency?.limit ?? '-';
+            const concurrencyUsage = apiProduct.concurrency?.usage ?? '-';
+
+            // Dates
+            const periodStart = data.period_starts_at || '';
+            const periodEnd = data.period_ends_at || '';
+
+            // Filtered top-ups
+            const filteredTopUps = filterTopUps(topUps);
+            const filterLabel = getFilterLabel();
+
+            let html = '';
+
+            // Stats Cards
+            html += `<div class="stats-grid">
+                <div class="stat-card primary">
+                    <span class="stat-label">Plan</span>
+                    <span class="stat-value">${planName}</span>
+                    <span class="stat-sub">
+                        <span class="badge" style="color: white; background: rgba(255,255,255,0.25);">
+                            ${status}
+                        </span>
+                        ${recurrence ? ` · ${recurrence.toLowerCase()}` : ''}
+                    </span>
+                </div>
+                <div class="stat-card ${actualPercent >= 80 ? 'danger' : 'success'}">
+                    <span class="stat-label">Total Usage</span>
+                    <span class="stat-value">$${totalUsageDollars.toFixed(2)}</span>
+                    <span class="stat-sub">of $${totalBudget.toFixed(2)} total budget (${actualPercent}%)</span>
+                </div>
+                <div class="stat-card ${parseFloat(remainingDollars) < (totalBudget * 0.2) ? 'warning' : 'success'}">
+                    <span class="stat-label">Remaining</span>
+                    <span class="stat-value">$${remainingDollars}</span>
+                    <span class="stat-sub">${100 - actualPercent}% budget left</span>
+                </div>
+                <div class="stat-card">
+                    <span class="stat-label">API Concurrency</span>
+                    <span class="stat-value">${concurrencyUsage} / ${concurrencyLimit}</span>
+                    <span class="stat-sub">Active / Max</span>
+                </div>
+            </div>`;
+
+            // Usage Progress Bar
+            html += `<div class="usage-bar-container">
+                <h3>Budget Usage — ${actualPercent}%</h3>
+                <div class="usage-bar-bg">
+                    <div class="usage-bar-fill ${getBarClass(actualPercent)}" style="width: ${Math.max(actualPercent, 2)}%">
+                        ${actualPercent}%
+                    </div>
+                </div>
+            </div>`;
+
+            // Products Breakdown Table
+            const productEntries = Object.entries(products);
+            if (productEntries.length > 0) {
+                html += `<div class="details-section">
+                    <h3>Usage By Product</h3>
+                    <table>
+                        <thead><tr><th>Product</th><th>Usage ($)</th></tr></thead>
+                        <tbody>`;
+                productEntries.forEach(([key, prod]) => {
+                    const usageVal = prod.usage ?? 0;
+                    const highlight = usageVal > 0 ? 'font-weight: 600;' : 'opacity: 0.5;';
+                    html += `<tr style="${highlight}">
+                        <td>${prod.name || key}</td>
+                        <td>$${usageVal.toFixed(2)}</td>
+                    </tr>`;
+                });
+                html += `</tbody></table></div>`;
+            }
+
+            // Subscription Details
+            html += `<div class="details-section">
+                <h3>Subscription Details</h3>
+                <table>
+                    <tbody>
+                        <tr><th>Billing Period Start</th><td>${formatDate(periodStart)}</td></tr>
+                        <tr><th>Billing Period End</th><td>${formatDate(periodEnd)}</td></tr>
+                        <tr><th>Plan Price</th><td>$${planPrice.toFixed(2)} / ${recurrence.toLowerCase()}</td></tr>
+                        <tr><th>Top-Up Credits</th><td>$${topUpTotal.toFixed(2)}</td></tr>
+                        <tr><th>Total Budget</th><td><strong>$${totalBudget.toFixed(2)}</strong></td></tr>
+                        <tr><th>Max Concurrency</th><td>${concurrencyLimit}</td></tr>
+                    </tbody>
+                </table>
+            </div>`;
+
+            // Top-ups
+            if (filteredTopUps.length > 0) {
+                html += `<div class="details-section">
+                    <h3>Top-Ups${filterLabel}</h3>
+                    <table>
+                        <thead><tr><th>Date</th><th>Amount</th></tr></thead>
+                        <tbody>`;
+                filteredTopUps.forEach(t => {
+                    html += `<tr>
+                        <td>${formatDate(t.purchase_date)}</td>
+                        <td>$${(t.price || 0).toFixed(2)}</td>
+                    </tr>`;
+                });
+                const filteredTotal = filteredTopUps.reduce((s, t) => s + (t.price || 0), 0);
+                html += `<tr style="font-weight: 700; border-top: 2px solid #dee2e6;">
+                    <td>Total</td>
+                    <td>$${filteredTotal.toFixed(2)}</td>
+                </tr>`;
+                html += `</tbody></table></div>`;
+            } else if (topUps.length > 0 && filteredTopUps.length === 0) {
+                html += `<div class="details-section">
+                    <h3>Top-Ups${filterLabel}</h3>
+                    <p style="color: #999; font-size: 0.9rem;">No top-ups found for this period.</p>
+                </div>`;
+            }
+
+            document.getElementById('content').innerHTML = html;
+        }
+
+        async function fetchUsage() {
+            document.getElementById('content').innerHTML = `
+                <div class="loading">
+                    <span class="spinner"></span> Loading usage data from ZenRows...
+                </div>`;
+
+            try {
+                const res = await fetch('/api/usage', {
+                    headers: sessionPassword ? { 'X-Usage-Password': sessionPassword } : {}
+                });
+                const data = await res.json();
+
+                if (data.error === 'Unauthorized') {
+                    lockPage();
+                    return;
+                }
+
+                renderUsage(data);
+            } catch (err) {
+                document.getElementById('content').innerHTML = `
+                    <div class="error-msg">
+                        <strong>Network Error:</strong> ${err.message}
+                    </div>`;
+            }
+        }
+
+        function toggleRaw() {
+            const el = document.getElementById('rawJson');
+            el.style.display = el.style.display === 'block' ? 'none' : 'block';
+        }
+
+        // Auto-start with auth check
+        checkAuth();
+    </script>
+</body>
+
+</html>

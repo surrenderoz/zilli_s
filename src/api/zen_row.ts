@@ -18,7 +18,28 @@ async function retryRequest(fn: () => Promise<any>, retries = 1, delay = 1000) {
     }
 }
 
-export const processAddress = async (address: string) => {
+interface ProcessAddressOptions {
+    address: string;
+    client_name?: string;
+    email?: string;
+    file_name?: string;
+}
+
+// Save a processed result to Redis as a permanent record (separate from cache)
+async function saveResultToRedis(result: Record<string, any>) {
+    try {
+        const resultKey = `result:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`;
+        await redis.set(resultKey, JSON.stringify(result));
+
+        // Also add the key to a set for easy listing
+        await redis.sadd("result_keys", resultKey);
+    } catch (err: any) {
+        console.error("Failed to save result to Redis:", err.message);
+    }
+}
+
+export const processAddress = async (opts: ProcessAddressOptions) => {
+    const { address, client_name, email, file_name } = opts;
 
     try {
         // 0. Check Redis Cache
@@ -27,7 +48,16 @@ export const processAddress = async (address: string) => {
 
         if (cached) {
             console.log(`Cache hit for: ${address}`);
-            return JSON.parse(cached);
+            const cachedResult = JSON.parse(cached);
+            // Save to results store (different client/file may reference same address)
+            await saveResultToRedis({
+                ...cachedResult,
+                client_name,
+                email,
+                file_name,
+                savedAt: new Date().toISOString(),
+            });
+            return cachedResult;
         }
 
         console.log(`🔍 Searching Google for: ${address}...`);
@@ -53,21 +83,21 @@ export const processAddress = async (address: string) => {
         const zillowLink = organicResults.find((item: any) => item.link && item.link.includes("zillow.com/homedetails"));
 
         if (!zillowLink) {
-            return { address, comment: "No Zillow link found via Google Search" };
+            const noLinkResult = { address, comment: "No Zillow link found via Google Search" };
+            await saveResultToRedis({ ...noLinkResult, client_name, email, file_name, savedAt: new Date().toISOString() });
+            return noLinkResult;
         }
 
         // 3. Extract ZPID
         const zpidMatch = zillowLink.link.match(/(\d+)_zpid/);
         if (!zpidMatch) {
-            return { address, comment: "Failed to extract ZPID from URL" };
+            const noZpidResult = { address, comment: "Failed to extract ZPID from URL", property_url: zillowLink.link };
+            await saveResultToRedis({ ...noZpidResult, client_name, email, file_name, savedAt: new Date().toISOString() });
+            return noZpidResult;
         }
         const zpid = zpidMatch[1];
-        //         console.log(`✅ Found Zillow URL: ${zillowLink.link} (ZPID: ${zpid})`);
 
         // 4. Fetch Property Details (ZenRows Real Estate API)
-        // This endpoint was the key difference. test.ts uses specific realestate endpoint.
-        //         console.log(`🏠 Fetching property details for ZPID: ${zpid}...`);
-
         const propertyResponse = await retryRequest(() => axios.get(`https://realestate.api.zenrows.com/v1/targets/zillow/properties/${zpid}`, {
             params: {
                 apikey: API_KEY,
@@ -87,26 +117,38 @@ export const processAddress = async (address: string) => {
                 zipcode: data.zipcode,
                 property_url: data.property_url || zillowLink.link,
 
-                // Extra fields useful for debugging/future
+                // Extra fields
                 city: data.city,
                 state: data.state,
                 property_type: data.property_type,
+                zpid: zpid,
                 comment: ""
             };
 
-            // Save to Redis
+            // Save to Redis cache (for deduplication)
             await redis.set(cacheKey, JSON.stringify(result));
+
+            // Save to Redis results store (permanent record)
+            await saveResultToRedis({
+                ...result,
+                client_name,
+                email,
+                file_name,
+                savedAt: new Date().toISOString(),
+                rawData: data,
+            });
+
             return result;
         }
 
-        return { address, comment: "Failed to fetch details (Empty response)" };
+        const emptyResult = { address, comment: "Failed to fetch details (Empty response)", zpid, property_url: zillowLink.link };
+        await saveResultToRedis({ ...emptyResult, client_name, email, file_name, savedAt: new Date().toISOString() });
+        return emptyResult;
 
     } catch (e: any) {
         console.error(`Error processing ${address}:`, e.message);
-        // If 402/429 etc, maybe we should return it as comment
-        return {
-            address,
-            comment: `Error: ${e.message}`
-        };
+        const errorResult = { address, comment: `Error: ${e.message}` };
+        await saveResultToRedis({ ...errorResult, client_name, email, file_name, savedAt: new Date().toISOString() });
+        return errorResult;
     }
 };

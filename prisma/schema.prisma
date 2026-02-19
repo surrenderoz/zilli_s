@@ -1,0 +1,34 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+    provider = "prisma-client"
+    output   = "../src/generated/prisma"
+}
+
+datasource db {
+    provider = "mongodb"
+}
+
+model Property {
+    id                     String   @id @default(auto()) @map("_id") @db.ObjectId
+    address                String // Original search address
+    zillow_address         String? // Resolved Zillow address
+    zillow_estimated_price String? // Zestimate
+    zipcode                String?
+    city                   String?
+    state                  String?
+    property_url           String?
+    property_type          String?
+    zpid                   String?
+    bedrooms               Int?
+    bathrooms              Float?
+    livingArea             Int?
+    client_name            String?
+    email                  String?
+    file_name              String? // Source CSV file name
+    comment                String?
+    rawData                Json? // Store full ZenRows response
+    createdAt              DateTime @default(now())
+    updatedAt              DateTime @updatedAt
+}
