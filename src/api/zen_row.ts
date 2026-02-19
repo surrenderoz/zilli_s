@@ -26,9 +26,15 @@ interface ProcessAddressOptions {
 }
 
 // Save a processed result to Redis as a permanent record (separate from cache)
+// Uses a deterministic key based on file_name + address to prevent duplicates
+// when the same file is re-uploaded.
 async function saveResultToRedis(result: Record<string, any>) {
     try {
-        const resultKey = `result:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`;
+        const fileName = (result.file_name || 'unknown').toLowerCase().trim();
+        const address = (result.address || 'unknown').toLowerCase().trim();
+        // Deterministic key: same file + address = same key (overwrites, no duplicates)
+        const resultKey = `result:${fileName}:${address}`;
+
         await redis.set(resultKey, JSON.stringify(result));
 
         // Also add the key to a set for easy listing

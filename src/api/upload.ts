@@ -216,7 +216,60 @@ const service = new Elysia()
         upload.noLinkCount = 0; // Reset no-link counter
 
         try {
-          // RESUME LOGIC: Filter out already processed rows
+          // PRE-POPULATE: Check Redis for results already saved for this file's addresses
+          // This prevents re-processing when the same file is uploaded again
+          const existingResultKeys = await redis.smembers("result_keys");
+          if (existingResultKeys.length > 0 && upload.processedRows.length === 0) {
+            const fileName = (upload.originalName || '').toLowerCase().trim();
+            // Build a set of addresses we need to process
+            const addressSet = new Set(upload.rows.map((r: any) => r.address?.toLowerCase().trim()));
+
+            // Check which addresses already have results for this file
+            const keysToCheck = existingResultKeys.filter(k => {
+              // Match keys for this file: result:{filename}:{address}
+              return k.startsWith(`result:${fileName}:`);
+            });
+
+            if (keysToCheck.length > 0) {
+              const checkPipeline = redis.pipeline();
+              keysToCheck.forEach(k => checkPipeline.get(k));
+              const existingResults = await checkPipeline.exec();
+
+              let prePopulated = 0;
+              (existingResults || []).forEach(([err, val]) => {
+                if (err || !val) return;
+                const parsed = JSON.parse(val as string);
+                if (parsed.address && addressSet.has(parsed.address.toLowerCase().trim())) {
+                  // Pre-populate as already processed
+                  upload.processedRows.push({
+                    client_name: parsed.client_name || '',
+                    email: parsed.email || '',
+                    address: parsed.address || '',
+                    zillow_address: parsed.zillow_address || '',
+                    zillow_estimated_price: parsed.zillow_estimated_price || '',
+                    zipcode: parsed.zipcode || '',
+                    property_url: parsed.property_url || '',
+                    comment: parsed.comment || '',
+                    file_name: upload.originalName || ''
+                  });
+                  prePopulated++;
+                }
+              });
+
+              if (prePopulated > 0) {
+                console.log(`Session ${message.id}: Pre-populated ${prePopulated} results from Redis (already processed)`);
+                // Notify clients about the pre-populated progress
+                upload.clients.forEach(c => c.send({
+                  type: 'progress',
+                  processed: upload.processedRows.length,
+                  total: upload.total,
+                  message: `Loaded ${prePopulated} cached results. Processing remaining...`
+                }));
+              }
+            }
+          }
+
+          // RESUME LOGIC: Filter out already processed rows (now includes pre-populated ones)
           const processedAddresses = new Set(upload.processedRows.map(r => r.address));
           const rowsToProcess = upload.rows.filter(r => !processedAddresses.has(r.address));
 
@@ -830,6 +883,78 @@ const service = new Elysia()
     } catch (err: any) {
       console.error("Export error:", err.message);
       return { error: "Failed to export", details: err.message };
+    }
+  })
+  // 9. Cleanup/Deduplicate old Redis result keys
+  .post("/api/results/cleanup", async () => {
+    try {
+      const keys = await redis.smembers("result_keys");
+      if (!keys || keys.length === 0) return { message: "No results to clean up", before: 0, after: 0 };
+
+      const pipeline = redis.pipeline();
+      keys.forEach(k => pipeline.get(k));
+      const results = await pipeline.exec();
+
+      // Group by file_name + address, keep the newest
+      const bestByKey = new Map<string, { data: any, oldKey: string }>();
+      const oldKeysToRemove: string[] = [];
+
+      (results || []).forEach(([err, val], idx) => {
+        if (err || !val) {
+          // Stale key, mark for removal
+          oldKeysToRemove.push(keys[idx]);
+          return;
+        }
+        const parsed = JSON.parse(val as string);
+        const fileName = (parsed.file_name || 'unknown').toLowerCase().trim();
+        const address = (parsed.address || 'unknown').toLowerCase().trim();
+        const newKey = `result:${fileName}:${address}`;
+
+        const existing = bestByKey.get(newKey);
+        if (!existing || new Date(parsed.savedAt || 0).getTime() > new Date(existing.data.savedAt || 0).getTime()) {
+          if (existing) oldKeysToRemove.push(existing.oldKey);
+          bestByKey.set(newKey, { data: parsed, oldKey: keys[idx] });
+        } else {
+          oldKeysToRemove.push(keys[idx]);
+        }
+      });
+
+      // Write deduplicated results with new deterministic keys
+      const writePipeline = redis.pipeline();
+      const newKeySet: string[] = [];
+
+      for (const [newKey, { data, oldKey }] of bestByKey.entries()) {
+        writePipeline.set(newKey, JSON.stringify(data));
+        newKeySet.push(newKey);
+        // If the old key is different from the new key, mark old for removal
+        if (oldKey !== newKey) {
+          oldKeysToRemove.push(oldKey);
+        }
+      }
+
+      // Remove old keys
+      if (oldKeysToRemove.length > 0) {
+        const uniqueOldKeys = [...new Set(oldKeysToRemove)];
+        uniqueOldKeys.forEach(k => writePipeline.del(k));
+      }
+
+      // Replace the result_keys set
+      writePipeline.del("result_keys");
+      if (newKeySet.length > 0) {
+        writePipeline.sadd("result_keys", ...newKeySet);
+      }
+
+      await writePipeline.exec();
+
+      return {
+        message: "Cleanup complete",
+        before: keys.length,
+        after: newKeySet.length,
+        removed: keys.length - newKeySet.length
+      };
+    } catch (err: any) {
+      console.error("Cleanup error:", err.message);
+      return { error: "Failed to clean up", details: err.message };
     }
   });
 
