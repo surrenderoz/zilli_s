@@ -91,6 +91,52 @@ async function initUploadStore() {
             clients: []
           });
 
+          // Sync processed rows to Redis (ensures disk-only data appears in Results page)
+          if (processedRows.length > 0) {
+            const fileName = (meta.originalName || 'unknown').toLowerCase().trim();
+            let batch: string[] = [];
+            let totalSynced = 0;
+
+            const flushBatch = async (items: { key: string, value: string }[]) => {
+              if (items.length === 0) return;
+              const p = redis.pipeline();
+              const keys: string[] = [];
+              for (const item of items) {
+                p.set(item.key, item.value);
+                keys.push(item.key);
+              }
+              p.sadd("result_keys", ...keys);
+              await p.exec();
+              totalSynced += items.length;
+            };
+
+            let batchItems: { key: string, value: string }[] = [];
+
+            for (const row of processedRows) {
+              const address = (row.address || 'unknown').toLowerCase().trim();
+              const resultKey = `result:${fileName}:${address}`;
+
+              batchItems.push({
+                key: resultKey,
+                value: JSON.stringify({
+                  ...row,
+                  file_name: meta.originalName,
+                  savedAt: row.savedAt || meta.createdAt || new Date().toISOString(),
+                })
+              });
+
+              if (batchItems.length >= 500) {
+                await flushBatch(batchItems);
+                batchItems = [];
+              }
+            }
+
+            // Flush remaining
+            await flushBatch(batchItems);
+
+            console.log(`  → Synced ${totalSynced} rows to Redis for session ${id}`);
+          }
+
           console.log(`Restored upload session: ${id} (${processedRows.length}/${meta.total})`);
 
         } catch (e) {
