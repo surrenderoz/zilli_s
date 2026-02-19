@@ -90,6 +90,8 @@ export const processAddress = async (opts: ProcessAddressOptions) => {
 
         if (!zillowLink) {
             const noLinkResult = { address, comment: "No Zillow link found via Google Search" };
+            // Cache the negative result to avoid re-calling API for this address
+            await redis.set(cacheKey, JSON.stringify(noLinkResult));
             await saveResultToRedis({ ...noLinkResult, client_name, email, file_name, savedAt: new Date().toISOString() });
             return noLinkResult;
         }
@@ -98,6 +100,8 @@ export const processAddress = async (opts: ProcessAddressOptions) => {
         const zpidMatch = zillowLink.link.match(/(\d+)_zpid/);
         if (!zpidMatch) {
             const noZpidResult = { address, comment: "Failed to extract ZPID from URL", property_url: zillowLink.link };
+            // Cache the negative result to avoid re-calling API for this address
+            await redis.set(cacheKey, JSON.stringify(noZpidResult));
             await saveResultToRedis({ ...noZpidResult, client_name, email, file_name, savedAt: new Date().toISOString() });
             return noZpidResult;
         }
